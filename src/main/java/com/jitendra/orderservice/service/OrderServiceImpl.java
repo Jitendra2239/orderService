@@ -2,28 +2,33 @@ package com.jitendra.orderservice.service;
 
 
 
+import com.jitendra.event.*;
 import com.jitendra.orderservice.dto.OrderItemDTO;
 import com.jitendra.orderservice.dto.OrderRequestDTO;
 import com.jitendra.orderservice.dto.OrderResponseDTO;
+
 import com.jitendra.orderservice.exception.BadRequestException;
 import com.jitendra.orderservice.exception.ResourceNotFoundException;
 import com.jitendra.orderservice.model.Order;
 import com.jitendra.orderservice.model.OrderItem;
 import com.jitendra.orderservice.repository.OrderRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
+@RequiredArgsConstructor
 @Service
 public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
+    private final KafkaTemplate<String,Object> kafkaTemplate;
 
-    public OrderServiceImpl(OrderRepository orderRepository) {
-        this.orderRepository = orderRepository;
-    }
 
     @Override
     public OrderResponseDTO createOrder(OrderRequestDTO request) {
@@ -69,7 +74,11 @@ public class OrderServiceImpl implements OrderService {
         response.setUserId(savedOrder.getUserId());
         response.setTotalAmount(savedOrder.getTotalAmount());
         response.setOrderStatus(savedOrder.getOrderStatus());
-
+        OrderCreatedEvent event=new OrderCreatedEvent();
+        event.setOrderId(response.getOrderId());
+        event.setQuantity(10);
+        event.setProductId(78l);
+        publishOrderEvent(event);
         return response;
     }
 
@@ -124,5 +133,52 @@ public class OrderServiceImpl implements OrderService {
         order.setOrderStatus("CANCELLED");
 
         orderRepository.save(order);
+    }
+    public void publishOrderEvent(OrderCreatedEvent event){
+
+        kafkaTemplate.send("order-created", event);
+
+    }
+    @KafkaListener(topics = "payment-success", groupId = "order-group")
+    public void consumePaymentSuccess(PaymentSuccessEvent event) {
+
+        System.out.println("Payment successful for order: " + event.getOrderId());
+
+        Long order1= event.getOrderId();
+        Optional<Order>order2=orderRepository.findById(order1);
+        if(order2.isPresent()) {
+            Order    order = order2.get();
+            order.setOrderStatus("CONFIRMED");
+            orderRepository.save(order);
+        }
+
+    }
+
+    @KafkaListener(topics = "payment-failed", groupId = "order-group")
+    public void consumePaymentFailed(PaymentFailedEvent event) {
+
+        System.out.println("Payment failed for order: " + event.getOrderId());
+        Long order1= event.getOrderId();
+        Optional<Order>order2=orderRepository.findById(order1);
+        if(order2.isPresent()) {
+            Order      order = order2.get();
+            order.setOrderStatus("PAYMENT_FAILED\"");
+            orderRepository.save(order);
+        }
+
+    }
+
+    @KafkaListener(topics = "inventory-failed", groupId = "order-group")
+    public void consumeInventoryFailed(InventoryFailedEvent event) {
+
+        System.out.println("Inventory failed for order: " + event.getOrderId());
+        Long order1= event.getOrderId();
+        Optional<Order>order2=orderRepository.findById(order1);
+        if(order2.isPresent()) {
+            Order order = order2.get();
+            order.setOrderStatus("Product not Avilabel");
+
+        orderRepository.save(order);
+        }
     }
 }

@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/orders")
+@RequestMapping("/api/v1/order")
 public class OrderController {
 
     private final OrderService orderService;
@@ -20,7 +20,7 @@ public class OrderController {
         this.orderService = orderService;
     }
 
-    @PostMapping
+    @PostMapping("/save")
     public ResponseEntity<OrderResponseDTO> createOrder(
             @RequestBody OrderRequestDTO request) {
 
