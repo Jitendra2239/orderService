@@ -9,7 +9,7 @@ public class OrderResponseDTO {
 
     private Long orderId;
     private Long userId;
-    private BigDecimal totalAmount;
+    private Double totalAmount;
     private String orderStatus;
     private List<OrderItemDTO> items;
 

@@ -13,11 +13,11 @@ public class Order {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    private Long order_id;
 
     private Long userId;
 
-    private BigDecimal totalAmount;
+    private Double totalAmount;
 
     private String orderStatus;
 
@@ -28,6 +28,7 @@ public class Order {
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
+    private String cancelStatus;
 
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL)
     private List<OrderItem> orderItems;
