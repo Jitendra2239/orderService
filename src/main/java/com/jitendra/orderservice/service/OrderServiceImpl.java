@@ -8,6 +8,7 @@ import com.jitendra.orderservice.dto.OrderRequestDTO;
 import com.jitendra.orderservice.dto.OrderResponseDTO;
 
 import com.jitendra.orderservice.exception.BadRequestException;
+import com.jitendra.orderservice.exception.OrderNotFoundException;
 import com.jitendra.orderservice.exception.ResourceNotFoundException;
 import com.jitendra.orderservice.model.Order;
 import com.jitendra.orderservice.model.OrderItem;
@@ -186,13 +187,12 @@ public class OrderServiceImpl implements OrderService {
 
         System.out.println("Payment successful for order: " + event.getOrderId());
 
-        Long order1= event.getOrderId();
-        Optional<Order>order2=orderRepository.findById(order1);
-        if(order2.isPresent()) {
-            Order    order = order2.get();
-            order.setOrderStatus("CONFIRMED");
-            orderRepository.save(order);
-        }
+
+        Order order=orderRepository.findById(event.getOrderId()).orElseThrow(()->new OrderNotFoundException("Order not found with id " + event.getOrderId()));
+        if("CONFIRMED".equals(order.getOrderStatus()))return;
+        order.setOrderStatus("CONFIRMED");
+        orderRepository.save(order);
+
 
     }
 
@@ -200,13 +200,9 @@ public class OrderServiceImpl implements OrderService {
     public void consumePaymentFailed(PaymentFailedEvent event) {
 
         System.out.println("Payment failed for order: " + event.getOrderId());
-        Long order1= event.getOrderId();
-        Optional<Order>order2=orderRepository.findById(order1);
-        if(order2.isPresent()) {
-            Order      order = order2.get();
-            order.setOrderStatus("PAYMENT_FAILED\"");
-            orderRepository.save(order);
-        }
+        Order order=orderRepository.findById(event.getOrderId()).orElseThrow(()->new OrderNotFoundException("Order not found with id " + event.getOrderId()));
+        order.setOrderStatus("Payment failed");
+        orderRepository.save(order);
 
     }
 
