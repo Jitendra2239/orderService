@@ -16,7 +16,7 @@ public class Order {
     private Long order_id;
 
     private Long userId;
-
+    private String trackingId;
     private Double totalAmount;
 
     private String orderStatus;

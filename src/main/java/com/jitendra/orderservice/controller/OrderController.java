@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 @RequiredArgsConstructor
 @RestController
-@RequestMapping("/api/v1/order")
+@RequestMapping("/api/v1/orders")
 public class OrderController {
 
     private final OrderService orderService;
@@ -22,11 +22,12 @@ public class OrderController {
 
     @PostMapping("/save")
     public ResponseEntity<OrderResponseDTO> createOrder(
-            @RequestBody OrderRequestDTO request,@RequestHeader("Authorization") String token) {
-        String jwt = token.substring(7); // remove "Bearer "
-
-        Long userId = jwtUtil.extractUserId(jwt);
-        return ResponseEntity.ok(orderService.createOrder(request,userId));
+            @RequestBody OrderRequestDTO request){
+//            @RequestHeader("Authorization") String token) {
+//        String jwt = token.substring(7); // remove "Bearer "
+//
+//        Long userId = jwtUtil.extractUserId(jwt);
+        return ResponseEntity.ok(orderService.createOrder(request,request.getUserId()));
     }
 
     @GetMapping("/{id}")

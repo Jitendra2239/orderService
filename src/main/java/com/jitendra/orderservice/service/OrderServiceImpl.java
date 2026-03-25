@@ -12,6 +12,7 @@ import com.jitendra.orderservice.exception.OrderNotFoundException;
 import com.jitendra.orderservice.exception.ResourceNotFoundException;
 import com.jitendra.orderservice.model.Order;
 import com.jitendra.orderservice.model.OrderItem;
+import com.jitendra.orderservice.model.OrderStatus;
 import com.jitendra.orderservice.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -74,8 +75,8 @@ public class OrderServiceImpl implements OrderService {
         UserCreatedEvent user = (UserCreatedEvent) redisTemplate.opsForValue().get(key);
         OrderCreatedEvent event=new OrderCreatedEvent();
         event.setOrderId(savedOrder.getOrder_id());
-        List<OrderItemDto> orderItems = new ArrayList<>();
-        OrderItemDto itemDto = new OrderItemDto();
+        List<OrderItemEvent> orderItems = new ArrayList<>();
+        OrderItemEvent itemDto = new OrderItemEvent();
                savedOrder.getOrderItems().forEach(item->{
                    itemDto.setProductId(item.getProductId());
                    item.setQuantity(item.getQuantity());
@@ -159,9 +160,9 @@ public class OrderServiceImpl implements OrderService {
         order.setOrderStatus("CANCELLED");
         orderRepository.save(order);
 
-        List<OrderItemDto> itemDtos = order.getOrderItems().stream()
+        List<OrderItemEvent> itemDtos = order.getOrderItems().stream()
                 .map(item -> {
-                    OrderItemDto dto = new OrderItemDto();
+                    OrderItemEvent dto = new OrderItemEvent();
                     dto.setProductId(item.getProductId());
                     dto.setQuantity(item.getQuantity());
                     return dto;
@@ -187,7 +188,7 @@ public class OrderServiceImpl implements OrderService {
 
         System.out.println("Payment successful for order: " + event.getOrderId());
 
-
+        System.out.println("Payment successful for order: " + event.getOrderId());
         Order order=orderRepository.findById(event.getOrderId()).orElseThrow(()->new OrderNotFoundException("Order not found with id " + event.getOrderId()));
         if("CONFIRMED".equals(order.getOrderStatus()))return;
         order.setOrderStatus("CONFIRMED");
@@ -246,6 +247,25 @@ public class OrderServiceImpl implements OrderService {
         existing .setVersion(event.getVersion());
 
         redisTemplate.opsForValue().set(key,existing );
+    }
+    @KafkaListener(topics = "shipment-created", groupId = "order-group")
+    public void handleShipmentCreated(ShipmentCreatedEvent event) {
+
+        Order order = orderRepository.findById(event.getOrderId()).orElseThrow();
+
+        order.setOrderStatus(OrderStatus.SHIPPED.toString());
+        order.setTrackingId(event.getTrackingId());
+
+        orderRepository.save(order);
+    }
+
+    @KafkaListener(topics = "shipment-failed", groupId = "order-group")
+    public void handleShipmentFailed(ShipmentFailedEvent event) {
+
+        Order order = orderRepository.findById(event.getOrderId()).orElseThrow();
+
+        order.setOrderStatus(OrderStatus.SHIPPED_FAILED.toString());
+        orderRepository.save(order);
     }
 
 }

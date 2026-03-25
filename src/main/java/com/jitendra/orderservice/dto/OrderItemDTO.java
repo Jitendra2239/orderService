@@ -6,7 +6,7 @@ import java.math.BigDecimal;
 @Data
 public class OrderItemDTO {
 
-    private Long productId;
+    private String productId;
     private Integer quantity;
     private Double price;
 
