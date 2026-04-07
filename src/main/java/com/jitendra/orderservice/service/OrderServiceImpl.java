@@ -18,9 +18,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -34,7 +38,7 @@ public class OrderServiceImpl implements OrderService {
     private final RedisTemplate<String, Object> redisTemplate;
 
     @Override
-    public OrderResponseDTO createOrder(OrderRequestDTO request,long userId) {
+    public OrderResponseDTO createOrder(OrderRequestDTO request,String email) {
 
         if (request.getItems() == null || request.getItems().isEmpty()) {
             throw new BadRequestException("Order must contain at least one item");
@@ -70,7 +74,7 @@ public class OrderServiceImpl implements OrderService {
         order.setTotalAmount(totalAmount);
 
         Order savedOrder = orderRepository.save(order);
-        String key = "user:" + userId;
+        String key = "user:" + order.getUserId();
 
         UserCreatedEvent user = (UserCreatedEvent) redisTemplate.opsForValue().get(key);
         OrderCreatedEvent event=new OrderCreatedEvent();
@@ -84,7 +88,7 @@ public class OrderServiceImpl implements OrderService {
                });
         event.setItems(orderItems);
         event.setTotalAmount(totalAmount);
-        event.setUserId(userId);
+        event.setUserId(order.getUserId());
         event.setEmail(user.getEmail());
         event.setFirstName(user.getName());
         event.setPhone(user.getPhone());
@@ -108,11 +112,21 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    public OrderResponseDTO getOrderById(Long orderId) {
-
+    public OrderResponseDTO getOrderById(Long orderId,String email) {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Order not found with id " + orderId));
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        boolean isAdmin = authentication.getAuthorities()
+                .stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+        if (!isAdmin) {
+            if (!order.getEmail().equals(email)) {
+                throw new AccessDeniedException("You are not allowed to cancel this order");
+            }
+        }
+
+
 
         OrderResponseDTO response = new OrderResponseDTO();
         response.setOrderId(order.getOrder_id());
@@ -148,18 +162,53 @@ public class OrderServiceImpl implements OrderService {
         return responses;
     }
 
+
     @Override
-    public void cancelOrder(Long orderId) {
+    public List<OrderResponseDTO> getOrdersByUser(String email) {
+
+        return orderRepository.findByUserEmail(email)
+                .stream()
+                .map(this::mapToDto)
+                .toList();
+    }
+
+    @Override
+    public void cancelOrder(Long orderId, String email) {
 
         Order order = orderRepository.findById(orderId)
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("Order not found with id " + orderId));
+                .orElseThrow(() -> new RuntimeException("Order not found"));
         if (order.getOrderStatus().equals("SHIPPED") || order.getOrderStatus().equals("DELIVERED")) {
             throw new RuntimeException("Cannot cancel order at this stage");
         }
-        order.setOrderStatus("CANCELLED");
-        orderRepository.save(order);
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
 
+        boolean isAdmin = authentication.getAuthorities()
+                .stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+
+        // 🔒 If NOT admin → check ownership
+        if (!isAdmin) {
+            if (!order.getEmail().equals(email)) {
+                throw new AccessDeniedException("You are not allowed to cancel this order");
+            }
+        }
+
+
+        if ("CANCELLED".equalsIgnoreCase(order.getOrderStatus())) {
+            throw new RuntimeException("Order already cancelled");
+        }
+
+
+        if ("DELIVERED".equalsIgnoreCase(order.getOrderStatus())) {
+            throw new RuntimeException("Delivered order cannot be cancelled");
+        }
+
+
+        order.setOrderStatus("CANCELLED");
+        order.setCancelStatus("CANCELLED");
+        order.setUpdatedAt(LocalDateTime.now());
+
+        orderRepository.save(order);
         List<OrderItemEvent> itemDtos = order.getOrderItems().stream()
                 .map(item -> {
                     OrderItemEvent dto = new OrderItemEvent();
@@ -175,13 +224,43 @@ public class OrderServiceImpl implements OrderService {
         event.setItems(itemDtos);
 
         kafkaTemplate.send("order-cancelled", event);
-
-
     }
+
     public void publishOrderEvent(OrderCreatedEvent event){
 
         kafkaTemplate.send("order-created", event);
 
+    }
+    private OrderResponseDTO mapToDto(Order order) {
+
+        OrderResponseDTO dto = new OrderResponseDTO();
+
+        dto.setOrderId(order.getOrder_id());
+        dto.setUserId(order.getUserId());
+        dto.setTotalAmount(order.getTotalAmount());
+        dto.setOrderStatus(order.getOrderStatus());
+
+        // Map OrderItems → OrderItemDTO
+        if (order.getOrderItems() != null) {
+            List<OrderItemDTO> items = order.getOrderItems()
+                    .stream()
+                    .map(this::mapItemToDto)
+                    .toList();
+
+            dto.setItems(items);
+        }
+
+        return dto;
+    }
+    private OrderItemDTO mapItemToDto(OrderItem item) {
+
+        OrderItemDTO dto = new OrderItemDTO();
+
+        dto.setProductId(item.getProductId());
+        dto.setQuantity(item.getQuantity());
+        dto.setPrice(item.getPrice());
+
+        return dto;
     }
     @KafkaListener(topics = "payment-success", groupId = "order-group")
     public void consumePaymentSuccess(PaymentSuccessEvent event) {

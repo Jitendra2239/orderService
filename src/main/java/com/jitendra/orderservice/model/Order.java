@@ -16,6 +16,7 @@ public class Order {
     private Long order_id;
 
     private Long userId;
+    private String email;
     private String trackingId;
     private Double totalAmount;
 
