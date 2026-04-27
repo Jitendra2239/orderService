@@ -27,8 +27,10 @@ public class HeaderAuthenticationFilter extends OncePerRequestFilter {
         System.out.println("path->"+request.getRequestURI());
         String email = request.getHeader("X-User-Email");
         String rolesHeader = request.getHeader("X-User-Roles");
+        String userId=      request.getHeader("X-User-Id");
         System.out.println("rolesHeader->"+rolesHeader);
         System.out.println("email->"+email);
+        System.out.println("userId->"+userId);
         if (email != null && rolesHeader != null) {
 
             List<GrantedAuthority> authorities =
@@ -36,9 +38,10 @@ public class HeaderAuthenticationFilter extends OncePerRequestFilter {
                             .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
                             .collect(Collectors.toList());
             System.out.println("authorities->"+authorities.get(1));
+            UserPrincipal principal = new UserPrincipal(userId, email);
             UsernamePasswordAuthenticationToken auth =
                     new UsernamePasswordAuthenticationToken(
-                            email,
+                            principal,
                             null,
                             authorities
                     );

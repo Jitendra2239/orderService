@@ -3,9 +3,7 @@ package com.jitendra.orderservice.service;
 
 
 import com.jitendra.event.*;
-import com.jitendra.orderservice.dto.OrderItemDTO;
-import com.jitendra.orderservice.dto.OrderRequestDTO;
-import com.jitendra.orderservice.dto.OrderResponseDTO;
+import com.jitendra.orderservice.dto.*;
 
 import com.jitendra.orderservice.exception.BadRequestException;
 import com.jitendra.orderservice.exception.OrderNotFoundException;
@@ -15,13 +13,17 @@ import com.jitendra.orderservice.model.OrderItem;
 import com.jitendra.orderservice.model.OrderStatus;
 import com.jitendra.orderservice.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -35,78 +37,99 @@ public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
     private final KafkaTemplate<String,Object> kafkaTemplate;
-    private final RedisTemplate<String, Object> redisTemplate;
+    private final CartAndAdress cartAndAdress;
 
     @Override
-    public OrderResponseDTO createOrder(OrderRequestDTO request,String email) {
+    public OrderResponseDTO createOrder(Long userId, String email,AddressDto address) {
 
-        if (request.getItems() == null || request.getItems().isEmpty()) {
-            throw new BadRequestException("Order must contain at least one item");
+
+        CartDto cart = cartAndAdress.getCart(userId);
+
+        if (cart == null || cart.getItems() == null || cart.getItems().isEmpty()) {
+            throw new BadRequestException("Cart is empty");
+        }
+
+
+
+        System.out.println("email->cart------>"+cart);
+        if (address == null) {
+            throw new BadRequestException("Address not found");
         }
 
         Order order = new Order();
-        order.setUserId(request.getUserId());
-        order.setShippingAddress(request.getShippingAddress());
+        order.setUserId(userId);
+        order.setShippingAddress(address.getStreet()+" "+address.getCity()+" "+address.getState()+" "+address.getCountry()+" "+address.getPincode());
         order.setOrderStatus("CREATED");
 
         List<OrderItem> items = new ArrayList<>();
-        Double totalAmount = 0.0;
+        double totalAmount = 0.0;
 
-        for (OrderItemDTO itemDTO : request.getItems()) {
+        for (CartItem item : cart.getItems()) {
 
-            OrderItem item = new OrderItem();
-            item.setProductId(itemDTO.getProductId());
-            item.setQuantity(itemDTO.getQuantity());
-            item.setPrice(itemDTO.getPrice());
+            if (item == null) continue;
 
-            Double totalPrice =
-                    (itemDTO.getPrice())*(itemDTO.getQuantity());
+            double price = item.getPrice() == null ? 0.0 : item.getPrice();
+            int qty = item.getQuantity() == null ? 0 : item.getQuantity();
 
-            item.setTotalPrice(totalPrice);
-            item.setOrder(order);
+            OrderItem orderItem = new OrderItem();
+            orderItem.setProductId(item.getProductId());
+            orderItem.setQuantity(qty);
+            orderItem.setPrice(price);
 
-            totalAmount = totalAmount+totalPrice;
+            double totalPrice = price * qty;
 
-            items.add(item);
+            orderItem.setTotalPrice(totalPrice);
+            orderItem.setOrder(order);
+
+            totalAmount += totalPrice;
+            items.add(orderItem);
         }
 
         order.setOrderItems(items);
         order.setTotalAmount(totalAmount);
 
+        // 🔹 4. Save Order
         Order savedOrder = orderRepository.save(order);
-        String key = "user:" + order.getUserId();
 
-        UserCreatedEvent user = (UserCreatedEvent) redisTemplate.opsForValue().get(key);
-        OrderCreatedEvent event=new OrderCreatedEvent();
-        event.setOrderId(savedOrder.getOrder_id());
-        List<OrderItemEvent> orderItems = new ArrayList<>();
-        OrderItemEvent itemDto = new OrderItemEvent();
-               savedOrder.getOrderItems().forEach(item->{
-                   itemDto.setProductId(item.getProductId());
-                   item.setQuantity(item.getQuantity());
-                   orderItems.add(itemDto);
-               });
-        event.setItems(orderItems);
+        // 🔹 5. Kafka Event (FIXED)
+        OrderCreatedEvent event = new OrderCreatedEvent();
+        event.setOrderId(savedOrder.getOrderId());
+        event.setUserId(userId);
+        event.setEmail(email);
+
         event.setTotalAmount(totalAmount);
-        event.setUserId(order.getUserId());
-        event.setEmail(user.getEmail());
-        event.setFirstName(user.getName());
-        event.setPhone(user.getPhone());
         event.setStatus("CREATED");
-        kafkaTemplate.send("order-created", savedOrder.getOrder_id().toString(), event);
-        NotificationEvent event1 = new NotificationEvent();
-        event1.setUserId(order.getUserId());
-       // event.setEmail(order.getUserId());
-        event1.setType("ORDER_PLACED");
-        event1.setMessage("Your order is placed!");
 
-        kafkaTemplate.send("notification-topic", event1);
+        List<OrderItemEvent> orderItems = new ArrayList<>();
+
+        for (OrderItem item : savedOrder.getOrderItems()) {
+            OrderItemEvent itemEvent = new OrderItemEvent(); // ✅ NEW object each time
+            itemEvent.setProductId(item.getProductId());
+            itemEvent.setQuantity(item.getQuantity());
+
+            orderItems.add(itemEvent);
+        }
+
+        event.setItems(orderItems);
+
+        kafkaTemplate.send("order-created",  event);
+
+        // 🔹 6. Notification Event
+        NotificationEvent notification = new NotificationEvent();
+        notification.setUserId(userId);
+        notification.setOrder_id(savedOrder.getOrderId());
+        notification.setEmail(email);
+        notification.setType("ORDER_PLACED");
+        notification.setMessage("Your order is placed!");
+
+        kafkaTemplate.send("notification-topic", notification);
+
+        // 🔹 7. Response
         OrderResponseDTO response = new OrderResponseDTO();
-        response.setOrderId(savedOrder.getOrder_id());
+        response.setOrderId(savedOrder.getOrderId());
         response.setUserId(savedOrder.getUserId());
         response.setTotalAmount(savedOrder.getTotalAmount());
         response.setOrderStatus(savedOrder.getOrderStatus());
-
 
         return response;
     }
@@ -129,12 +152,31 @@ public class OrderServiceImpl implements OrderService {
 
 
         OrderResponseDTO response = new OrderResponseDTO();
-        response.setOrderId(order.getOrder_id());
+        response.setOrderId(order.getOrderId());
         response.setUserId(order.getUserId());
         response.setTotalAmount(order.getTotalAmount());
         response.setOrderStatus(order.getOrderStatus());
 
         return response;
+    }
+
+    @Override
+    public Order getOrderById(Long orderId) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Order not found with id " + orderId));
+
+
+      return order;
+    }
+@Override
+    public OrderProjection getOrderDetails(Long orderId){
+
+        return orderRepository
+                .findProjectedByOrderId(orderId)
+                .orElseThrow(
+                        () -> new RuntimeException("Order not found")
+                );
     }
 
     @Override
@@ -151,7 +193,7 @@ public class OrderServiceImpl implements OrderService {
         for (Order order : orders) {
 
             OrderResponseDTO dto = new OrderResponseDTO();
-            dto.setOrderId(order.getOrder_id());
+            dto.setOrderId(order.getOrderId());
             dto.setUserId(order.getUserId());
             dto.setTotalAmount(order.getTotalAmount());
             dto.setOrderStatus(order.getOrderStatus());
@@ -166,7 +208,7 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public List<OrderResponseDTO> getOrdersByUser(String email) {
 
-        return orderRepository.findByUserEmail(email)
+        return orderRepository.findByEmail(email)
                 .stream()
                 .map(this::mapToDto)
                 .toList();
@@ -219,7 +261,7 @@ public class OrderServiceImpl implements OrderService {
                 .toList();
 
         OrderCancelledEvent event = new OrderCancelledEvent();
-        event.setOrderId(order.getOrder_id());
+        event.setOrderId(order.getOrderId());
         event.setUserId(order.getUserId());
         event.setItems(itemDtos);
 
@@ -235,7 +277,7 @@ public class OrderServiceImpl implements OrderService {
 
         OrderResponseDTO dto = new OrderResponseDTO();
 
-        dto.setOrderId(order.getOrder_id());
+        dto.setOrderId(order.getOrderId());
         dto.setUserId(order.getUserId());
         dto.setTotalAmount(order.getTotalAmount());
         dto.setOrderStatus(order.getOrderStatus());
@@ -262,12 +304,16 @@ public class OrderServiceImpl implements OrderService {
 
         return dto;
     }
+
+
+
+
     @KafkaListener(topics = "payment-success", groupId = "order-group")
     public void consumePaymentSuccess(PaymentSuccessEvent event) {
 
         System.out.println("Payment successful for order: " + event.getOrderId());
 
-        System.out.println("Payment successful for order: " + event.getOrderId());
+        System.out.println("Payment successful for order: " + event.getUserId());
         Order order=orderRepository.findById(event.getOrderId()).orElseThrow(()->new OrderNotFoundException("Order not found with id " + event.getOrderId()));
         if("CONFIRMED".equals(order.getOrderStatus()))return;
         order.setOrderStatus("CONFIRMED");
@@ -303,30 +349,30 @@ public class OrderServiceImpl implements OrderService {
 
 
 
-    @KafkaListener(topics = "user-created")
-    public void handleUserCreated(UserCreatedEvent event) {
-
-        String key = "user:" + event.getUserId();
-
-        redisTemplate.opsForValue().set(key, event);
-    }
-    @KafkaListener(topics = "user-updated")
-    public void handleUserUpdated(UserUpdatedEvent event) {
-
-        String key = "user:" + event.getUserId();
-
-       UserCreatedEvent existing =(UserCreatedEvent) redisTemplate.opsForValue().get(key);
-
-
-
-        existing.setUserId(event.getUserId());
-        existing.setName(event.getName());
-        existing.setEmail(event.getEmail());
-        existing.setAddressLine(event.getAddressLine());
-        existing .setVersion(event.getVersion());
-
-        redisTemplate.opsForValue().set(key,existing );
-    }
+//    @KafkaListener(topics = "user-created")
+//    public void handleUserCreated(UserCreatedEvent event) {
+//
+//        String key = "user:" + event.getUserId();
+//
+//        redisTemplate.opsForValue().set(key, event);
+//    }
+//    @KafkaListener(topics = "user-updated")
+//    public void handleUserUpdated(UserUpdatedEvent event) {
+//
+//        String key = "user:" + event.getUserId();
+//
+//       UserCreatedEvent existing =(UserCreatedEvent) redisTemplate.opsForValue().get(key);
+//
+//
+//
+//        existing.setUserId(event.getUserId());
+//        existing.setName(event.getName());
+//        existing.setEmail(event.getEmail());
+//        existing.setAddressLine(event.getAddressLine());
+//        existing .setVersion(event.getVersion());
+//
+//        redisTemplate.opsForValue().set(key,existing );
+//    }
     @KafkaListener(topics = "shipment-created", groupId = "order-group")
     public void handleShipmentCreated(ShipmentCreatedEvent event) {
 
